@@ -1,0 +1,82 @@
+#pragma enable_d3d11_debug_symbols
+
+#pragma kernel CSMain
+
+struct Node
+{
+	float3 pos;
+	float3 topPos;
+	float3 botPos;
+	float3 leftPos;
+	float3 rightPos;
+	int isVertical[4];
+	int isActive[4];
+	int isExplored[4];
+};
+
+
+RWStructuredBuffer<Node> _Nodes;
+AppendStructuredBuffer<float4> _Walls;
+int _Entrance;
+int _Exit;
+float4 _ResolutionPadding;
+
+
+int TwoDimsToOneDim(int2 index)
+{
+	if (index.x >= (_ResolutionPadding.x + 1) || index.y >= ( _ResolutionPadding.y + 1))
+		return -1;
+	return index.x * (_ResolutionPadding.y + 1) + index.y;
+}
+
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+
+	int width = _ResolutionPadding.x;
+	int height = _ResolutionPadding.y;
+	float2 padding = _ResolutionPadding.zw;
+	if (id.x >= width + 2)
+		return;
+	if (id.y >= height+ 2)
+		return;
+
+
+	
+	int x = id.x;
+	int z = id.y;
+
+	if (x < width + 1)
+	{
+		int2 xzDim = int2(x, z == height + 1 ? z - 1 : z);
+		Node horizontalNode = _Nodes[TwoDimsToOneDim(xzDim)];
+		int edgeIndex = (xzDim.x < width) ? 3 : 2;
+		float3 edgePos = edgeIndex == 3 ? horizontalNode.rightPos : horizontalNode.leftPos;
+		if (!((horizontalNode.isActive[1] == 1) && (z > 0 && z < height + 1)) &&
+			(!(x == _Entrance & z == 0)) && (!(x == _Exit && z == height + 1)))
+		{
+			float4 pos = float4(edgePos.x + (x == width ? padding.x * 0.5f : -padding.x * 0.5f),
+				1.0f,
+				edgePos.z + (z == height + 1 ? padding.y * 0.5f : -padding.y * 0.5f),
+				-1.0f); // negative w coordinate means its horizontal;
+			_Walls.Append(pos);
+		}
+	}
+	if (z < height + 1)
+	{
+		int2 xzDim = int2(x == width + 1 ? x - 1 : x, z);
+		Node verticalNode = _Nodes[TwoDimsToOneDim(xzDim)];
+		int edgeIndex = (xzDim.y < height) ? 0 : 1;
+		float3 edgePos = edgeIndex == 0 ? verticalNode.topPos : verticalNode.botPos;
+		if (!((verticalNode.isActive[2] == 1) && (x > 0 && x < width + 1)))
+		{
+			 float4 pos = float4(edgePos.x + (x == width + 1 ? padding.x * 0.5f : -padding.x * 0.5f),
+				1.0f,
+				edgePos.z + (z == height ? padding.y * 0.5f : -padding.y * 0.5f),
+				1.0f); // positive for vertical node
+			_Walls.Append(pos);
+		}
+	}
+		
+}

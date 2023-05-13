@@ -1,0 +1,54 @@
+#pragma enable_d3d11_debug_symbols
+#pragma kernel CSMain
+
+
+struct Node
+{
+    float3 pos;
+    float3 topPos;
+    float3 botPos;
+    float3 leftPos;
+    float3 rightPos;
+    int isVertical[4];
+    int isActive[4];
+    int isExplored[4];
+};
+
+RWStructuredBuffer<Node> _Nodes;
+float4 _PaddingResolution;
+
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (float)_PaddingResolution.z || id.y >= _PaddingResolution.w)
+        return;
+    float x = (float)id.x;
+    float z = (float)id.y;
+    Node node;
+    int index = id.x * _PaddingResolution.w + id.y;
+    float3 pos = float3(x * _PaddingResolution.x, 0.0f, z * _PaddingResolution.y);
+    node.pos = pos;
+    node.topPos = float3(pos.x, 0.0f, pos.z + _PaddingResolution.y * 0.5f);
+    node.botPos = float3(pos.x, 0.0f, pos.z - _PaddingResolution.y * 0.5f);
+    node.leftPos = float3(pos.x - _PaddingResolution.x * 0.5f, 0.0f, pos.z);
+    node.rightPos = float3(pos.x + _PaddingResolution.x * 0.5f, 0.0f, pos.z);
+    node.isActive[0] = 0;
+    node.isActive[1] = 0;
+    node.isActive[2] = 0;
+    node.isActive[3] = 0;
+    node.isExplored[0] = 0;
+    node.isExplored[1] = 0;
+    node.isExplored[2] = 0;
+    node.isExplored[3] = 0;
+    node.isVertical[0] = 0;
+    node.isVertical[1] = 0;
+    node.isVertical[2] = 1;
+    node.isVertical[3] = 1;
+
+    _Nodes[index] = node;
+
+    
+
+
+}

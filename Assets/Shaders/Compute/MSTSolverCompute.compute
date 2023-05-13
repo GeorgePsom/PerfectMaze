@@ -1,0 +1,262 @@
+#pragma enable_d3d11_debug_symbols
+
+#pragma kernel CSMain
+
+
+
+
+
+uint rng_state;
+ 
+struct Node
+{
+	float3 pos;
+	float3 topPos;
+	float3 botPos;
+	float3 leftPos;
+	float3 rightPos;
+	int isVertical[4];
+	int isActive[4];
+	int isExplored[4];
+};
+
+
+RWStructuredBuffer<Node> _Nodes;
+
+float4 _MiniResolution;
+float4 _Seed;
+// Code copy pasted from :
+//https://www.reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
+uint rand_xorshift()
+{
+	// Xorshift algorithm from George Marsaglia's paper
+	rng_state ^= (rng_state << 13);
+	rng_state ^= (rng_state >> 17);
+	rng_state ^= (rng_state << 5);
+	return rng_state;
+}
+
+uint RandomInRange(uint start, uint end)
+{
+	uint random = rand_xorshift();
+	uint rangeSize = end - start;
+	return start + (random % rangeSize);
+}
+
+struct LightNode
+{
+	bool isActive[4];
+	bool isExplored[4];
+};
+
+
+
+
+
+int3 GetNumberOfNodes(int4 posResolution, int2 miniBlockSize, bool custom = false)
+{
+	if (posResolution.x < 0 || posResolution.x > _MiniResolution.z - 1)
+		return int3(0, 0, 0);
+	if (posResolution.y < 0 || posResolution.y > _MiniResolution.w - 1)
+		return int3(0, 0, 0);
+
+
+	int xNodes = (posResolution.x + posResolution.z - 1) < _MiniResolution.z ? posResolution.z : (_MiniResolution.z  - posResolution.x);
+	int zNodes = (posResolution.y + posResolution.w - 1) < _MiniResolution.w ? posResolution.w : (_MiniResolution.w  - posResolution.y);
+	
+	if (miniBlockSize.x != posResolution.z && custom)
+	{
+		int2 MBSize;
+		MBSize.x = miniBlockSize.x == 0 ? 1 : miniBlockSize.x; // to avoid division by zero error.
+		MBSize.y = miniBlockSize.y == 0 ? 1 : miniBlockSize.y;
+		xNodes = (xNodes % MBSize.x) == 0 ? xNodes / MBSize.x : xNodes / MBSize.x + 1;
+		zNodes = (zNodes % MBSize.y) == 0 ? zNodes / MBSize.y : zNodes / MBSize.y + 1;
+
+	}
+	
+	return int3(xNodes, zNodes, xNodes * zNodes);
+
+
+}
+
+
+int GetNeighbor(int index, int dir, int cellResolution = 0, bool custom = false)
+{
+	int cells = custom ? cellResolution : _MiniResolution.w;
+	if (dir == 0)
+	{
+		return index + 1;
+	}
+	else if (dir == 1)
+	{
+		return index - 1;
+	}
+	else if (dir == 2)
+	{
+		return index - cells;
+	}
+	else if (dir == 3)
+	{
+		return index + cells;
+	}
+	return -1;
+
+}
+
+int GetOppositeEdgeIndex(int dir)
+{
+	switch (dir)
+	{
+	case 0:
+		return 1;
+	case 1:
+		return 0;
+	case 2:
+		return 3;
+	case 3:
+		return 2;
+	}
+
+	return -1;
+}
+
+int TwoDimsToOneDim(int2 index)
+{
+	if (index.x >= _MiniResolution.z || index.y >= _MiniResolution.w)
+		return -1;
+	return index.x * _MiniResolution.w + index.y;
+}
+
+
+
+
+
+[numthreads(8,8,1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+
+	uint iter = id.z;
+	rng_state = dot((id + uint3(1, 1, 1)), uint3(_Seed.x, _Seed.y, _Seed.z)); // initialize rng_state based on threadID.
+	uint xScale = pow(_MiniResolution.x, iter + 1);
+	uint xScalePrev = xScale / _MiniResolution.x;
+	uint zScale = pow(_MiniResolution.y, iter + 1);
+	uint zScalePrev = zScale / _MiniResolution.y;
+
+	int x = id.x * xScale;
+	if (x >= _MiniResolution.z)
+		return;
+	int z = id.y * zScale;
+	if (z >= _MiniResolution.w)
+		return;
+
+	int3 nNodes = GetNumberOfNodes(float4(x, z, xScale, zScale), int2(xScalePrev, zScalePrev), true);
+	if (nNodes.z == 0 || nNodes.z == 1)
+		return;
+
+
+	if (nNodes.x == 1)
+	{
+		for (int j = 0; j < nNodes.y - 1; j++)
+		{
+			int xOrigin = x;
+			int zOrigin = z + j * zScalePrev;
+			int realIndex;
+			int3 nRealNodes = GetNumberOfNodes(int4(xOrigin, zOrigin, xScalePrev, zScalePrev), int2(0, 0));
+			int randomNode = RandomInRange(0, nRealNodes.x);
+			realIndex = TwoDimsToOneDim(int2(xOrigin + randomNode, zOrigin + nRealNodes.y - 1));
+			_Nodes[realIndex].isActive[0] = 1;
+			int neighbor = GetNeighbor(realIndex, 0);
+			_Nodes[neighbor].isActive[1] = 1;
+		}
+		return;
+	}
+
+	if (nNodes.y == 1)
+	{
+		for (int i = 0; i < nNodes.x - 1; i++)
+		{
+			int xOrigin = x + i * xScalePrev;;
+			int zOrigin = z;
+			int realIndex;
+			int3 nRealNodes = GetNumberOfNodes(int4(xOrigin, zOrigin, xScalePrev, zScalePrev), int2(0, 0));
+			int randomNode = RandomInRange(0, nRealNodes.y);
+			realIndex = TwoDimsToOneDim(int2(xOrigin + nRealNodes.x - 1, zOrigin + randomNode));
+			_Nodes[realIndex].isActive[3] = 1;
+			int neighbor = GetNeighbor(realIndex, 3);
+			_Nodes[neighbor].isActive[2] = 1;
+		}
+		return;
+	}
+
+
+	for (int j = 0; j < nNodes.y - 1; j++)
+	{
+		for (int i = 0; i < nNodes.x - 1; i++)
+		{
+			// We divide each miniblock in 2x2 blocks because its easier to make MST graphs.
+			// Based on the index we can either:
+			// i) choose from all 4 edges 3 to activate if its the first 2x2 (i == 0 && j == 0)
+			// ii) if  (j == 0 && i !=0) we choose 2 out of the 3 available edges.
+			//  The leftmost vertical edge is not available because it will make a loop with the left neighbor
+			// iii) if (i== 0 && j!=0) we choose 2 out of the 3 available edges. The botmost horizontal edge is not available.
+			// iv) if (i != 0 && j != 0) we choose 1 out of the 2 available edges. Botmost and leftmost are not available.
+
+
+			// we start from bottom left then go top, right, bottom and left. For example if 0 is randomly selected then the edge 
+			// that connect the bottom left node to the top left node (leftmost vertical edge) in 2x2 graph will be deactivated. 
+			// If 2 is selected then the edge that connects right top to the right bottom node will be deactivated.
+			int startIndex = i == 0 ? 0 : 1;
+			int endIndex = j == 0 ? 3 : 2;
+			int count = endIndex - startIndex;
+			int deactivateEdgeIndex = RandomInRange(startIndex, endIndex + 1);
+			int xOrigin = x + i * xScalePrev;
+			int zOrigin = z + j * zScalePrev;
+			for (int dir = startIndex; dir < endIndex + 1; dir++)
+			{
+				int trueDir;
+				if (dir == deactivateEdgeIndex)
+					continue;
+				int realIndex;
+				// leftmost edge
+				if (dir == 0)
+				{
+					trueDir = 0;
+					int3 nRealNodes = GetNumberOfNodes(int4(xOrigin, zOrigin, xScalePrev, zScalePrev), int2(1, 1), false);
+					int randomNode = RandomInRange(0, nRealNodes.x);
+					realIndex = TwoDimsToOneDim(int2(xOrigin + randomNode, zOrigin + nRealNodes.y - 1));
+				}
+				// topmost edge
+				else if (dir == 1)
+				{
+					trueDir = 3;
+					int3 nRealNodes = GetNumberOfNodes(int4(xOrigin, zOrigin + zScalePrev, xScalePrev, zScalePrev), int2(1, 1), false);
+					int randomNode = RandomInRange(0, nRealNodes.y);
+					realIndex = TwoDimsToOneDim(int2(xOrigin + nRealNodes.x - 1, zOrigin + zScalePrev + randomNode));
+
+				}
+				// rightmost edge
+				else if (dir == 2)
+				{
+					trueDir = 1;
+					int3 nRealNodes = GetNumberOfNodes(int4(xOrigin + xScalePrev, zOrigin + zScalePrev, xScalePrev, zScalePrev), int2(1, 1), false);
+					int randomNode = RandomInRange(0, nRealNodes.x);
+					realIndex = TwoDimsToOneDim(int2(xOrigin + xScalePrev + randomNode, zOrigin + zScalePrev));
+
+				}
+				//botmost edge
+				else if (dir == 3)
+				{
+					trueDir = 2;
+					int3 nRealNodes = GetNumberOfNodes(int4(xOrigin + xScalePrev, zOrigin, xScalePrev, zScalePrev), int2(1, 1), false);
+					int randomNode = RandomInRange(0, nRealNodes.y);
+					realIndex = TwoDimsToOneDim(int2(xOrigin + xScalePrev, zOrigin + randomNode));
+
+				}
+				_Nodes[realIndex].isActive[trueDir] = 1;
+				int neighbor = GetNeighbor(realIndex, trueDir);
+				_Nodes[neighbor].isActive[GetOppositeEdgeIndex(trueDir)] = 1;
+			}
+		}
+	}
+
+}
